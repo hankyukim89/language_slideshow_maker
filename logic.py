@@ -7,6 +7,7 @@ from google.cloud import texttospeech
 from google.api_core import client_options
 from moviepy import ImageClip, AudioFileClip, concatenate_videoclips, CompositeAudioClip
 import utils
+from langdetect import detect
 
 class SlideshowConfig:
     def __init__(self):
@@ -128,7 +129,7 @@ class SlideshowGenerator:
             
         return bg.convert('RGB')
 
-from langdetect import detect
+
 
     def generate_audio(self, text, lang_name):
         """Generates audio file for text. Returns path."""
