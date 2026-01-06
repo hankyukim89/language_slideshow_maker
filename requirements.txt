@@ -1,0 +1,8 @@
+pandas
+openpyxl
+Pillow
+gTTS
+google-cloud-texttospeech
+moviepy
+customtkinter
+langdetect
