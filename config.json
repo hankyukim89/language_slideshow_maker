@@ -1,0 +1,16 @@
+{
+    "font_size": 60,
+    "font_name": "Arial",
+    "bg_opacity": 0.5,
+    "sentence_pause": 0.5,
+    "slide_pause": 0.5,
+    "tts_provider": "google_cloud",
+    "api_key": "AIzaSyAdrfilNZDQ9JqMpidcY0XkRyZRQHJ7tkg",
+    "tts_voice_id_1": "es-US-Wavenet-A",
+    "tts_voice_id_2": "Pulcherrima",
+    "tts_speed": 1.0,
+    "bg_image_path": "",
+    "lang1": "Spanish",
+    "lang2": "English",
+    "tts_voice_id": "en-US-Polyglot-1"
+}

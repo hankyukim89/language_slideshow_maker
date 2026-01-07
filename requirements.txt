@@ -6,3 +6,4 @@ google-cloud-texttospeech
 moviepy
 customtkinter
 langdetect
+pygame

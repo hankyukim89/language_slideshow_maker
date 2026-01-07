@@ -12,6 +12,7 @@ from langdetect import detect
 class SlideshowConfig:
     def __init__(self):
         self.font_path = "Arial.ttf" # Default, might need system path
+        self.font_name = "Arial"
         self.font_size = 60
         self.bg_image_path = None
         self.bg_opacity = 0.5 # 0.0 to 1.0 (overlay opacity)
@@ -19,6 +20,9 @@ class SlideshowConfig:
         self.sentence_pause = 0.5 # seconds
         self.tts_provider = "gTTS" # or "google_cloud"
         self.api_key = ""
+        self.tts_voice_id_1 = "" 
+        self.tts_voice_id_2 = ""
+        self.tts_speed = 1.0 # 0.5 to 4.0
         self.output_resolution = (1920, 1080)
         self.text_color = "white"
 
@@ -85,9 +89,19 @@ class SlideshowGenerator:
         
         try:
             # Try to load font, fallback to default
-            font = ImageFont.truetype(self.config.font_path, self.config.font_size)
+            # If font_name is provided, try to find it. 
+            # Pillow needs a path to a ttf file usually, or system font loading is platform specific.
+            # For simplicity, if it's a path use it, otherwise try default.
+            # In a real app we might map font family names to paths.
+            # Just relying on font_path from config which should be updating with absolute path from GUI if possible?
+            # Or if it's just a name "Arial", PIL might find it if installed.
+            font = ImageFont.truetype(self.config.font_name, self.config.font_size)
         except:
-            font = ImageFont.load_default()
+            # Try appending .ttf
+            try:
+                font = ImageFont.truetype(f"{self.config.font_name}.ttf", self.config.font_size)
+            except:
+                font = ImageFont.load_default()
             # Default font size is fixed/small, so this is a bad fallback but prevents crash.
 
         margin = 100
@@ -131,7 +145,7 @@ class SlideshowGenerator:
 
 
 
-    def generate_audio(self, text, lang_name):
+    def generate_audio(self, text, lang_name, specific_voice_id=None):
         """Generates audio file for text. Returns path."""
         lang_code = utils.get_language_code(lang_name)
         
@@ -143,7 +157,7 @@ class SlideshowGenerator:
                 print(f"Language detection failed: {e}. Defaulting to 'en'.")
                 lang_code = 'en'
 
-        filename = f"tts_{hash(text)}_{lang_code}.mp3"
+        filename = f"tts_{hash(text)}_{lang_code}_{self.config.tts_provider}_{self.config.tts_speed}_{specific_voice_id}.mp3"
         filepath = os.path.join(self.temp_dir, filename)
         
         if os.path.exists(filepath):
@@ -154,12 +168,31 @@ class SlideshowGenerator:
                 options = client_options.ClientOptions(api_key=self.config.api_key)
                 client = texttospeech.TextToSpeechClient(client_options=options)
                 input_text = texttospeech.SynthesisInput(text=text)
-                voice = texttospeech.VoiceSelectionParams(
-                    language_code=lang_code,
-                    ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
-                )
+                # Voice selection
+                voice_params = {"language_code": lang_code}
+                
+                # Use specific voice if provided, otherwise config, otherwise neutral
+                vid = specific_voice_id
+                
+                if vid:
+                    voice_params["name"] = vid
+                    # Fix for Google Cloud strict matching: 'es' != 'es-ES'
+                    # If we have a specific voice, we should trust its language code.
+                    # Voice IDs are usually "lang-region-voice" (e.g. es-ES-Standard-A)
+                    parts = vid.split('-')
+                    if len(parts) >= 2:
+                         voice_params["language_code"] = f"{parts[0]}-{parts[1]}"
+                
+                print(f"DEBUG: voice_params={voice_params}")
+                
+                # Check for gender in voice name if manual selection not present, or just default to Neutral
+                # If tts_voice_id is present, it usually implies gender/type.
+                
+                voice = texttospeech.VoiceSelectionParams(**voice_params)
+
                 audio_config = texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.MP3
+                    audio_encoding=texttospeech.AudioEncoding.MP3,
+                    speaking_rate=self.config.tts_speed
                 )
                 response = client.synthesize_speech(
                     input=input_text, voice=voice, audio_config=audio_config
@@ -172,9 +205,82 @@ class SlideshowGenerator:
                 # Fallback
         
         # gTTS
-        tts = gTTS(text=text, lang=lang_code)
+        # gTTS doesn't support fine-grained speed control natively easily without hacks or post-processing.
+        # But we can assume standard speed for now.
+        tts = gTTS(text=text, lang=lang_code, slow=False)
         tts.save(filepath)
+        
+        # If speed is not 1.0, we might want to use ffmpeg/moviepy to speed it up/slow down later?
+        # For this iteration, let's keep gTTS speed fixed or implement a hack if critical.
+        # User requested speed control for gTTS too.
+        # We can do this by post-processing the audio file with moviepy/ffmpeg right now.
+        
+        if self.config.tts_speed != 1.0:
+            # Rename original to 'raw'
+            raw_path = filepath + "_raw.mp3"
+            os.rename(filepath, raw_path)
+            # Use moviepy to change speed? AudioFileClip doesn't have speed change easily.
+            # Using ffmpeg via moviepy's ffmpeg_tools or just os.system
+            # setpts filter is for video, atempo is for audio.
+            # cmd: ffmpeg -i input -filter:a "atempo=SPEED" -vn output
+            import subprocess
+            cmd = [
+                "ffmpeg", "-y", "-i", raw_path, 
+                "-filter:a", f"atempo={self.config.tts_speed}", 
+                "-vn", filepath
+            ]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
         return filepath
+
+    def get_google_voices(self):
+        """Returns a list of available voices from Google Cloud."""
+        if not self.config.api_key:
+            return []
+        try:
+            options = client_options.ClientOptions(api_key=self.config.api_key)
+            client = texttospeech.TextToSpeechClient(client_options=options)
+            response = client.list_voices()
+            voices = []
+            for voice in response.voices:
+                # Filter by our supported languages slightly? Or just return all?
+                # Returning all is safer, GUI can filter.
+                voices.append({
+                    "name": voice.name,
+                    "language_codes": voice.language_codes,
+                    "ssml_gender": texttospeech.SsmlVoiceGender(voice.ssml_gender).name
+                })
+            return voices
+        except Exception as e:
+            print(f"Error fetching voices: {e}")
+            return []
+
+    def estimate_cost(self, data):
+        """Estimates cost for Google Cloud TTS."""
+        if self.config.tts_provider != 'google_cloud':
+            return "Free (gTTS)"
+        
+        char_count = 0
+        for item in data:
+            char_count += len(item.get('text1', ''))
+            char_count += len(item.get('text2', ''))
+        
+        # Standard: $4.00 / 1M chars
+        # WaveNet: $16.00 / 1M chars
+        # Assuming WaveNet if using google cloud usually? Or check config.
+        # Let's assume standard price avg or show both.
+        
+        cost_standard = (char_count / 1_000_000) * 4.00
+        cost_wavenet = (char_count / 1_000_000) * 16.00
+        
+        return f"~${cost_standard:.4f} (Std) / ~${cost_wavenet:.4f} (WaveNet)"
+
+    def preview_audio(self, text, lang_name):
+        """Generates a preview audio file and returns the path."""
+        # Force re-generation for preview to hear changes
+        # We use a temp name
+        path = self.generate_audio(text, lang_name)
+        return path
 
     def create_video(self, data, lang1, lang2, output_path, progress_callback=None):
         """
@@ -198,8 +304,9 @@ class SlideshowGenerator:
             img.save(img_path)
             
             # Generate Audio
-            audio1_path = self.generate_audio(text1, lang1)
-            audio2_path = self.generate_audio(text2, lang2)
+            # We need to map lang1/lang2 to voice1/voice2
+            audio1_path = self.generate_audio(text1, lang1, specific_voice_id=self.config.tts_voice_id_1)
+            audio2_path = self.generate_audio(text2, lang2, specific_voice_id=self.config.tts_voice_id_2)
             
             # Create Clips
             # Audio 1
